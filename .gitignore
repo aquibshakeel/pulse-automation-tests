@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+yarn.lock
+package-lock.json
+
+# Test results
+reports/
+playwright-report/
+test-results/
+*.json
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Temp files
+tmp/
+temp/
