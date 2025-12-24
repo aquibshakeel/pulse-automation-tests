@@ -1,0 +1,51 @@
+{
+  "name": "pulse-automation-tests",
+  "version": "1.0.0",
+  "description": "Playwright automation framework with Kafka, MongoDB, SFTP/S3 support for MFT testing",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:service-a": "playwright test --project=service-a",
+    "test:service-b": "playwright test --project=service-b",
+    "test:mf": "playwright test tests/mf-order-management",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:critical": "playwright test --grep @critical",
+    "test:regression": "playwright test --grep @regression",
+    "report": "playwright show-report",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky install"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "testing",
+    "kafka",
+    "mongodb",
+    "mft"
+  ],
+  "author": "Pulse Automation Team",
+  "license": "ISC",
+  "dependencies": {
+    "@playwright/test": "^1.40.0",
+    "kafkajs": "^2.2.4",
+    "mongodb": "^6.3.0",
+    "ssh2-sftp-client": "^10.0.3",
+    "@aws-sdk/client-s3": "^3.470.0",
+    "winston": "^3.11.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-playwright": "^0.20.0",
+    "prettier": "^3.1.1",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
