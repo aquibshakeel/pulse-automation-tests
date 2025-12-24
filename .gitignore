@@ -1,13 +1,11 @@
 # Dependencies
 node_modules/
 yarn.lock
-package-lock.json
 
 # Test results
 reports/
 playwright-report/
 test-results/
-*.json
 
 # Environment variables
 .env
