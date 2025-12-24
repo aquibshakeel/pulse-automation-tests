@@ -1,0 +1,298 @@
+format_version: 10
+
+pipelines:
+  pulse-mft-automation:
+    group: automation-testing
+    label_template: "${COUNT}-${git[:7]}"
+    lock_behavior: unlockWhenFinished
+    display_order: 1
+    
+    materials:
+      git:
+        git: https://github.com/anandkedari/pulse-automation-tests.git
+        branch: main
+        shallow_clone: false
+        auto_update: true
+        destination: pulse-tests
+    
+    environment_variables:
+      TEST_ENV: ci
+      NODE_ENV: test
+      REPORT_PATH: reports
+      OPEN_REPORT: never
+      CI: "true"
+      # Override these in GoCD environment configuration
+      API_BASE_URL: http://localhost:3000
+      KAFKA_BROKERS: localhost:9092
+      MONGODB_URI: mongodb://localhost:27017
+      MONGODB_DATABASE: test_db
+      SFTP_HOST: localhost
+      SFTP_PORT: "2222"
+      SFTP_USERNAME: testuser
+      SFTP_PASSWORD: testpass
+    
+    stages:
+      # Stage 1: Environment Validation
+      - validate-environment:
+          clean_workspace: true
+          jobs:
+            check-prerequisites:
+              timeout: 5
+              tasks:
+                - exec:
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Validating Environment ==="
+                        
+                        # Check Node.js
+                        echo "Node.js Version:"
+                        node --version || { echo "❌ Node.js not found"; exit 1; }
+                        
+                        # Check npm
+                        echo "npm Version:"
+                        npm --version || { echo "❌ npm not found"; exit 1; }
+                        
+                        # Check Docker
+                        echo "Docker Version:"
+                        docker --version || { echo "❌ Docker not found"; exit 1; }
+                        
+                        # Check Docker Compose
+                        echo "Docker Compose Version:"
+                        docker-compose --version || { echo "❌ Docker Compose not found"; exit 1; }
+                        
+                        echo "✅ All prerequisites validated successfully"
+                    run_if: passed
+      
+      # Stage 2: Install Dependencies
+      - install-dependencies:
+          clean_workspace: false
+          jobs:
+            install-node-modules:
+              timeout: 10
+              artifacts:
+                - build:
+                    source: pulse-tests/node_modules
+                    destination: node_modules_cache
+              tasks:
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Installing Dependencies ==="
+                        
+                        # Install Node dependencies
+                        if [ -f "yarn.lock" ]; then
+                          echo "Using Yarn..."
+                          yarn install --frozen-lockfile
+                        else
+                          echo "Using npm..."
+                          npm ci
+                        fi
+                        
+                        echo "✅ Dependencies installed successfully"
+                    run_if: passed
+                
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Installing Playwright Browsers ==="
+                        npx playwright install --with-deps chromium
+                        echo "✅ Playwright browsers installed successfully"
+                    run_if: passed
+      
+      # Stage 3: Start Test Infrastructure
+      - start-infrastructure:
+          clean_workspace: false
+          jobs:
+            start-services:
+              timeout: 10
+              tasks:
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Starting Test Infrastructure ==="
+                        
+                        # Start Docker services
+                        docker-compose up -d
+                        
+                        echo "Waiting for services to be ready..."
+                        sleep 15
+                        
+                        # Verify services are running
+                        echo "=== Service Status ==="
+                        docker-compose ps
+                        
+                        # Wait for Kafka to be ready
+                        echo "Checking Kafka..."
+                        timeout 60 bash -c 'until docker exec pulse-kafka kafka-topics --bootstrap-server localhost:9092 --list &> /dev/null; do sleep 2; done' || {
+                          echo "❌ Kafka failed to start"
+                          docker-compose logs kafka
+                          exit 1
+                        }
+                        echo "✅ Kafka is ready"
+                        
+                        # Wait for MongoDB to be ready
+                        echo "Checking MongoDB..."
+                        timeout 60 bash -c 'until docker exec pulse-mongodb mongosh --eval "db.adminCommand(\"ping\")" &> /dev/null; do sleep 2; done' || {
+                          echo "❌ MongoDB failed to start"
+                          docker-compose logs mongodb
+                          exit 1
+                        }
+                        echo "✅ MongoDB is ready"
+                        
+                        echo "✅ All services started successfully"
+                    run_if: passed
+      
+      # Stage 4: Run MFT Tests
+      - run-mft-tests:
+          clean_workspace: false
+          jobs:
+            execute-tests:
+              timeout: 30
+              environment_variables:
+                SFTP_PORT: "2222"
+              artifacts:
+                - test:
+                    source: pulse-tests/reports/**/*
+                    destination: test-reports
+                - build:
+                    source: pulse-tests/reports/test-results.json
+                    destination: test-results
+              tabs:
+                TestReport: test-reports/index.html
+              tasks:
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Setting Up Test Environment ==="
+                        
+                        # Create .env file from template
+                        cp .env.example .env
+                        
+                        # Override with CI environment variables
+                        cat >> .env << EOF
+                        TEST_ENV=${TEST_ENV}
+                        API_BASE_URL=${API_BASE_URL}
+                        KAFKA_BROKERS=${KAFKA_BROKERS}
+                        MONGODB_URI=${MONGODB_URI}
+                        MONGODB_DATABASE=${MONGODB_DATABASE}
+                        SFTP_HOST=${SFTP_HOST}
+                        SFTP_PORT=${SFTP_PORT}
+                        SFTP_USERNAME=${SFTP_USERNAME}
+                        SFTP_PASSWORD=${SFTP_PASSWORD}
+                        REPORT_PATH=${REPORT_PATH}
+                        OPEN_REPORT=${OPEN_REPORT}
+                        CI=${CI}
+                        EOF
+                        
+                        echo "✅ Environment configured"
+                        
+                        echo "=== Running MFT Tests ==="
+                        
+                        # Run MFT tests and capture exit code
+                        set +e
+                        npm run test:mf
+                        TEST_EXIT_CODE=$?
+                        set -e
+                        
+                        echo "Test execution completed with exit code: ${TEST_EXIT_CODE}"
+                        
+                        # Generate HTML report regardless of test result
+                        echo "=== Generating Test Report ==="
+                        npx playwright show-report --host 0.0.0.0 || true
+                        
+                        # Exit with test result code
+                        if [ ${TEST_EXIT_CODE} -eq 0 ]; then
+                          echo "✅ All tests passed!"
+                        else
+                          echo "❌ Tests failed with code ${TEST_EXIT_CODE}"
+                        fi
+                        
+                        exit ${TEST_EXIT_CODE}
+                    run_if: passed
+      
+      # Stage 5: Publish Results
+      - publish-results:
+          clean_workspace: false
+          jobs:
+            generate-reports:
+              timeout: 5
+              tasks:
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Publishing Test Results ==="
+                        
+                        if [ -f "reports/test-results.json" ]; then
+                          echo "Test results JSON found:"
+                          cat reports/test-results.json | jq '.suites[].specs[] | {title: .title, ok: .ok}' || cat reports/test-results.json
+                        fi
+                        
+                        echo "✅ Results published"
+                    run_if: any
+      
+      # Stage 6: Cleanup (Always runs)
+      - cleanup:
+          clean_workspace: false
+          jobs:
+            teardown-services:
+              timeout: 5
+              tasks:
+                - exec:
+                    working_directory: pulse-tests
+                    command: bash
+                    arguments:
+                      - -c
+                      - |
+                        echo "=== Cleaning Up Test Infrastructure ==="
+                        
+                        # Stop and remove containers
+                        docker-compose down -v || true
+                        
+                        # Remove dangling volumes
+                        docker volume prune -f || true
+                        
+                        # Optional: Remove images (uncomment if needed)
+                        # docker-compose down --rmi all -v
+                        
+                        echo "✅ Cleanup completed"
+                    run_if: any
+
+# Environment configuration for different test environments
+environments:
+  pulse-local:
+    environment_variables:
+      TEST_ENV: local
+      API_BASE_URL: http://localhost:3000
+    pipelines:
+      - pulse-mft-automation
+  
+  pulse-staging:
+    environment_variables:
+      TEST_ENV: staging
+      API_BASE_URL: https://api-staging.pulse.com
+    pipelines:
+      - pulse-mft-automation
+  
+  pulse-production:
+    environment_variables:
+      TEST_ENV: production
+      API_BASE_URL: https://api.pulse.com
+    pipelines:
+      - pulse-mft-automation
